@@ -37,6 +37,9 @@ if printf '%s' "$message" | grep -qi 'permission'; then
 fi
 
 # Otherwise we're idle/waiting: dig the pending ask out of the transcript.
+# The jq tags its output so we know which shape we got:
+#   ASK::<question> Options: <labels>   — an AskUserQuestion (speak verbatim)
+#   TEXT::<full last assistant message> — a plain reply (trim to its question)
 spoken=""
 if [ -n "$transcript" ] && [ -f "$transcript" ]; then
   spoken="$(jq -rs '
@@ -45,19 +48,33 @@ if [ -n "$transcript" ] && [ -f "$transcript" ]; then
     # an AskUserQuestion in that message, if present
     | ( [ $last[] | select(.type=="tool_use" and .name=="AskUserQuestion") ] | first ) as $ask
     | if $ask then
-        ( [ $ask.input.questions[]
+        "ASK::" + ( [ $ask.input.questions[]
             | .question + " Options: " + ( [ .options[].label ] | join(", ") ) ]
           | join(" — ") )
       else
-        # otherwise the last text block of that message (the closing question)
-        ( [ $last[] | select(.type=="text") | .text ] | last // "" )
+        # otherwise the full text of that message; we trim it to the closing
+        # question below (the last text block is the whole reply in practice).
+        "TEXT::" + ( [ $last[] | select(.type=="text") | .text ] | last // "" )
       end
   ' "$transcript" 2>/dev/null)"
 fi
 
+# Split the tag off the front (kind = ASK | TEXT | "" if jq found nothing).
+kind="${spoken%%::*}"
+[ "$kind" = "$spoken" ] || spoken="${spoken#*::}"
+
 # Collapse whitespace; fall back to the generic message if we found nothing.
 spoken="$(printf '%s' "$spoken" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')"
 [ -n "$spoken" ] || spoken="$message"
+
+# For a plain reply, speak the *closing question*, not the lead-in answer.
+# Without this the length cap below keeps the first 320 chars (the explanation)
+# and the actual question at the end is never reached.
+if [ "$kind" = "TEXT" ] && printf '%s' "$spoken" | grep -q '?'; then
+  spoken="${spoken%\?*}?"                                     # end at the last '?'
+  spoken="$(printf '%s' "$spoken" \
+    | sed -E 's/.*[.!?][[:space:]]+([^.!?]*\?)$/\1/')"        # keep that final sentence
+fi
 
 # Cap length so a long answer stays a spoken cue, not an essay.
 max=320
