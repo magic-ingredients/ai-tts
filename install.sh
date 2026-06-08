@@ -96,6 +96,9 @@ in one short line. Modes: off (silent), read (the hook reads the pending questio
 aloud), chat (you speak each turn yourself via `say`, one question at a time).
 With no argument it prints the current mode. Affects only this session; voice
 defaults to off when a session starts.
+
+When the new mode is chat, also speak the confirmation aloud — run
+`say "Chat mode is on"` — so the user hears that voice is now live.
 EOF
 echo "✓ Installed /voice command to $VOICE_CMD"
 
