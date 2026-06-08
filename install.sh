@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 #
 # ai-tts — read terminal text aloud with the macOS system voice, and have
-# Claude Code speak when it needs your attention.
+# Claude Code speak what it needs when it's waiting on you.
 #
 # What it does (idempotent — safe to re-run):
 #   1. Adds a `speak` shell function to your shell rc file.
-#   2. Adds a Notification hook to ~/.claude/settings.json so Claude Code
-#      speaks the message whenever it's waiting on you. Existing settings
-#      and hooks are preserved (merged with jq, never clobbered).
+#   2. Writes a notification helper (ai-tts-notify.sh) into your Claude config
+#      dir and adds a Notification hook to settings.json that runs it. The
+#      helper speaks the *pending question and its options* (read from the
+#      session transcript), prefixed with a session label so you can tell which
+#      of several sessions is talking. Existing settings and hooks are preserved
+#      (merged with jq, never clobbered).
 #
-# Both call `say` with NO voice flag, so they follow whatever you've set as
-# the macOS System Voice (System Settings → Accessibility → Read & Speak →
-# System Voice). Set that to Siri (Voice 1–4) and you get the Siri voice —
-# something `say -v` can't do, because the Siri engine isn't in the `say`
-# voice catalogue; only the unflagged system default reaches it.
+# Everything calls `say` with NO voice flag, so it follows whatever you've set
+# as the macOS System Voice (System Settings -> Accessibility -> Read & Speak
+# -> System Voice). Set that to Siri (Voice 1-4) for the Siri voice — something
+# `say -v` can't do, because the Siri engine isn't in the `say` voice catalogue.
 #
 # Usage:    bash install.sh
 #
@@ -23,14 +25,18 @@
 set -euo pipefail
 
 # --- config ----------------------------------------------------------------
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # repo dir (this script's dir)
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
+HELPER_SRC="$SRC_DIR/ai-tts-notify.sh"           # shipped alongside this installer
+HELPER="$CLAUDE_DIR/ai-tts-notify.sh"            # installed copy
 MARKER="ai-tts-notify"                           # used to detect a prior install
 
 # --- preflight -------------------------------------------------------------
 [ "$(uname)" = "Darwin" ] || { echo "✗ This tool is macOS-only (uses the \`say\` command)." >&2; exit 1; }
 command -v say >/dev/null || { echo "✗ \`say\` not found — is this macOS?" >&2; exit 1; }
 command -v jq  >/dev/null || { echo "✗ \`jq\` is required. Install it: brew install jq" >&2; exit 1; }
+[ -f "$HELPER_SRC" ] || { echo "✗ Can't find ai-tts-notify.sh next to install.sh — run this from a clone of the repo." >&2; exit 1; }
 
 # --- 1. shell function -----------------------------------------------------
 case "${SHELL:-}" in
@@ -57,8 +63,15 @@ EOF
   echo "✓ Added \`speak\` to $RC"
 fi
 
-# --- 2. Claude Code notification hook --------------------------------------
+# --- 2. notification helper ------------------------------------------------
 mkdir -p "$CLAUDE_DIR"
+
+# Copy the helper in (overwrite, so re-running picks up improvements).
+cp "$HELPER_SRC" "$HELPER"
+chmod +x "$HELPER"
+echo "✓ Installed notification helper to $HELPER"
+
+# --- 3. Claude Code notification hook --------------------------------------
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 
 # Refuse to touch a malformed settings file rather than risk clobbering it.
@@ -71,7 +84,7 @@ if grep -q "$MARKER" "$SETTINGS"; then
   echo "✓ Claude notification hook already installed (skipping)."
 else
   cp "$SETTINGS" "$SETTINGS.bak"   # backup
-  CMD="jq -r '.message // \"Claude needs your input\"' | say  # $MARKER"
+  CMD="bash $HELPER  # $MARKER"
   tmp="$(mktemp)"
   jq --arg cmd "$CMD" \
     '.hooks.Notification = ((.hooks.Notification // []) + [{hooks: [{type: "command", command: $cmd}]}])' \
@@ -82,24 +95,27 @@ fi
 # --- done ------------------------------------------------------------------
 cat <<EOF
 
-Done. Two things are now set up:
+Done. Set up:
 
   • speak  — run \`source $RC\` (or open a new terminal), then:
                  speak "hello"
                  cat file.txt | speak
                  npm run build && speak "build done"
 
-  • Claude Code will speak its notification message whenever it needs you.
-    (Takes effect on the next Claude Code session.)
+  • Claude Code will speak the pending question + options whenever a session
+    needs you, prefixed with a label. (Takes effect on the next session.)
 
-Both use the macOS System Voice — no voice flag. To pick the voice
+Everything uses the macOS System Voice — no voice flag. To pick the voice
 (including Siri):
 
   1. Set up the Siri voice you want (System Settings → Siri).
   2. System Settings → Accessibility → Read & Speak → System Voice
      → set to Siri (Voice 1–4).
 
-Whatever you choose there is what \`speak\` and the notification hook speak.
+Telling sessions apart: the label is the project folder name by default. For
+two sessions in the same repo, launch one with a custom label:
+
+     CLAUDE_SESSION_NAME="backend" claude
 
 Note: \`Stop\` (end-of-turn) is intentionally NOT hooked — it fires after
 every single response and gets maddening fast. Notification is the useful one.

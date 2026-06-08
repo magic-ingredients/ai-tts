@@ -1,12 +1,17 @@
 # ai-tts
 
-Read terminal text aloud with native macOS voices, and have **Claude Code speak
-when it needs your attention** — with no daemon, no named pipe, and no
-background process.
+Read terminal text aloud with native macOS voices, and have **Claude Code tell
+you what it's waiting on** — out loud, across multiple sessions, with no daemon,
+no named pipe, and no background process.
+
+When a session needs you, it speaks the **pending question and its options**
+(not a generic "waiting for input"), prefixed with a **session label** so you
+know *which* of several running sessions is asking.
 
 The trick: macOS's `say` command already reads stdin and talks straight to the
-native audio layer. It *is* the audio engine. So the whole thing is a one-line
-shell function plus a Claude Code hook — config, not a program.
+native audio layer. It *is* the audio engine. So this is just a one-line shell
+function plus a small notification helper the installer drops into your Claude
+config dir.
 
 ```bash
 speak "build finished"
@@ -30,13 +35,16 @@ Both `speak` and the notification hook call `say` with **no voice flag**, so
 they follow your macOS **System Voice** — see [Choosing the voice](#choosing-the-voice)
 below to set it (including Siri).
 
-It sets up two things:
+It sets up three things:
 
 1. **A `speak` shell function** in your `~/.zshrc` (or `~/.bashrc`). Speaks its
    arguments, or reads stdin if given none. Run `source ~/.zshrc` or open a new
    terminal to pick it up.
-2. **A Claude Code `Notification` hook** in `settings.json`, so Claude speaks its
-   notification message whenever it's waiting on you.
+2. **A notification helper**, `ai-tts-notify.sh`, in your Claude config dir. It
+   reads the hook payload, finds the pending question in the session transcript,
+   and speaks it with a session label. (Re-running the installer refreshes it.)
+3. **A Claude Code `Notification` hook** in `settings.json` that runs the helper
+   whenever a session is waiting on you.
 
 ## Using `speak`
 
@@ -49,6 +57,40 @@ cat CHANGELOG.md | speak               # read a file aloud
 tail -f /var/log/system.log | speak    # narrate a live log stream
 make test && speak "tests passed" || speak "tests failed"
 ```
+
+## What Claude speaks when it needs you
+
+When a session triggers a `Notification`, the helper speaks one of:
+
+- **A permission prompt** → the message verbatim, e.g.
+  *"ai-tts: Claude needs your permission to use Bash."*
+- **A waiting-for-input prompt** → the **pending ask**, read from the session
+  transcript:
+  - an `AskUserQuestion` → the question plus each option label
+    (*"ai-tts: Deploy now or wait? Options: Deploy, Wait for CI."*), or
+  - a plain-text question → the last thing Claude said (capped so a long answer
+    stays a cue, not an essay).
+
+Every line is prefixed with a **session label** so you can tell which session is
+talking when several are open:
+
+- **Default:** the project **folder name** (the session's working dir). This
+  already distinguishes sessions running in different repos.
+- **Two sessions in the same repo?** Give one an explicit label by exporting
+  `CLAUDE_SESSION_NAME` before launching it:
+
+  ```bash
+  CLAUDE_SESSION_NAME="backend" claude
+  ```
+
+  Hook subprocesses inherit Claude Code's environment, so the helper picks it up.
+
+> **What this can't do:** speak-then-*reply-by-voice* to a specific background
+> session. A hook is one-way (payload in → audio out); it has no channel to
+> inject your answer back into a non-focused session. Claude Code's built-in
+> voice input only feeds the session you're currently focused on. Routing a
+> spoken reply to an arbitrary background session would need a terminal-level
+> hack (e.g. `tmux send-keys`) and lives outside this repo.
 
 ## Choosing the voice
 
@@ -98,8 +140,8 @@ CLAUDE_CONFIG_DIR=~/.claude-dev bash install.sh   # `claude-dev`      → ~/.cla
 ```
 
 The `speak` function is shell-level and works in every session regardless — only
-the **notification hook** is per-config-dir. Hooks take effect on the next Claude
-Code session in that dir.
+the **notification hook and its helper** are per-config-dir. Hooks take effect on
+the next Claude Code session in that dir.
 
 ### Why only `Notification`, not `Stop`?
 
@@ -111,21 +153,23 @@ yourself.
 
 ## What the hook looks like
 
-The installer merges this into `settings.json`:
+The installer merges this into `settings.json` (the path points at the helper it
+wrote into the same config dir):
 
 ```jsonc
 {
   "hooks": {
     "Notification": [
       { "hooks": [{ "type": "command",
-        "command": "jq -r '.message // \"Claude needs your input\"' | say  # ai-tts-notify" }] }
+        "command": "bash /Users/you/.claude/ai-tts-notify.sh  # ai-tts-notify" }] }
     ]
   }
 }
 ```
 
-`jq` pulls the real message off the event payload, so you hear *why* Claude needs
-you, not a canned phrase.
+The helper reads the event payload on stdin, resolves the session label and the
+pending question, and pipes the result to `say`. It's a few dozen lines of
+`bash` + `jq` — readable in `ai-tts-notify.sh`.
 
 ## Uninstall
 
@@ -133,6 +177,7 @@ you, not a canned phrase.
   rc file.
 - **Hook**: remove the entry marked `# ai-tts-notify` from each
   `settings.json`, or restore the `settings.json.bak` the installer left behind.
+- **Helper**: delete `ai-tts-notify.sh` from each Claude config dir.
 
 ## Why not a daemon / named pipe?
 
