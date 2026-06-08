@@ -22,16 +22,13 @@ Requires macOS and [`jq`](https://stedolan.github.io/jq/) (`brew install jq`).
 bash install.sh
 ```
 
-Pick a specific voice (default is the always-installed `Samantha`):
+The installer is **idempotent** (safe to re-run) and **non-destructive**: it
+merges into your shell rc and `settings.json` without clobbering — backing up
+`settings.json` and refusing to touch malformed JSON.
 
-```bash
-VOICE="Ava (Enhanced)" bash install.sh
-```
-
-The installer is **idempotent** (safe to re-run), **non-destructive** (merges
-into your shell rc and `settings.json` without clobbering — it backs up
-`settings.json` and refuses to touch malformed JSON), and falls back to
-`Samantha` if the requested voice isn't installed.
+Both `speak` and the notification hook call `say` with **no voice flag**, so
+they follow your macOS **System Voice** — see [Choosing the voice](#choosing-the-voice)
+below to set it (including Siri).
 
 It sets up two things:
 
@@ -53,9 +50,25 @@ tail -f /var/log/system.log | speak    # narrate a live log stream
 make test && speak "tests passed" || speak "tests failed"
 ```
 
-Change the voice anytime by editing `TTS_VOICE` in your rc file. List voices with
-`say -v '?'`; download premium ones in **System Settings → Accessibility →
-Spoken Content → Manage Voices**.
+## Choosing the voice
+
+`speak` and the notification hook deliberately run `say` with **no voice flag**,
+so both speak in whatever you've set as the macOS **System Voice**. Set it once,
+in the GUI, and everything follows:
+
+1. **Set up the Siri voice you want** — System Settings → **Siri** (choose the
+   Siri voice/accent).
+2. **Point the system at it** — System Settings → **Accessibility** → **Read &
+   Speak** → **System Voice** → set to **Siri (Voice 1–4)**.
+
+This is the only way to get the **Siri** voice: `say -v "<name>"` can't, because
+the Siri neural engine isn't in the `say` voice catalogue (`say -v '?'` never
+lists it). Only unflagged `say` — using the system default — reaches it.
+
+Prefer a classic voice instead? Set the System Voice to any installed voice
+(`say -v '?'` lists them; download more under Accessibility → Read & Speak →
+Manage Voices). To hard-code one specific voice regardless of the system
+setting, edit the `speak()` line in your rc file to `say -v "VoiceName" "$@"`.
 
 ## Claude Code notifications & multiple config dirs
 
@@ -105,7 +118,7 @@ The installer merges this into `settings.json`:
   "hooks": {
     "Notification": [
       { "hooks": [{ "type": "command",
-        "command": "jq -r '.message // \"Claude needs your input\"' | say -v \"Samantha\"  # ai-tts-notify" }] }
+        "command": "jq -r '.message // \"Claude needs your input\"' | say  # ai-tts-notify" }] }
     ]
   }
 }
