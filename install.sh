@@ -30,6 +30,11 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 HELPER_SRC="$SRC_DIR/ai-tts-notify.sh"           # shipped alongside this installer
 HELPER="$CLAUDE_DIR/ai-tts-notify.sh"            # installed copy
+VOICE_SRC="$SRC_DIR/ai-tts-voice.sh"             # voice-mode toggle, shipped too
+VOICE="$CLAUDE_DIR/ai-tts-voice.sh"              # installed copy
+VOICE_CMD="$CLAUDE_DIR/commands/voice.md"        # /voice slash command
+SKILL_SRC="$SRC_DIR/skills/chat/SKILL.md"        # /chat conversational skill
+SKILL_DST="$CLAUDE_DIR/skills/chat/SKILL.md"     # installed copy
 MARKER="ai-tts-notify"                           # used to detect a prior install
 
 # --- preflight -------------------------------------------------------------
@@ -37,6 +42,8 @@ MARKER="ai-tts-notify"                           # used to detect a prior instal
 command -v say >/dev/null || { echo "✗ \`say\` not found — is this macOS?" >&2; exit 1; }
 command -v jq  >/dev/null || { echo "✗ \`jq\` is required. Install it: brew install jq" >&2; exit 1; }
 [ -f "$HELPER_SRC" ] || { echo "✗ Can't find ai-tts-notify.sh next to install.sh — run this from a clone of the repo." >&2; exit 1; }
+[ -f "$VOICE_SRC" ]  || { echo "✗ Can't find ai-tts-voice.sh next to install.sh — run this from a clone of the repo." >&2; exit 1; }
+[ -f "$SKILL_SRC" ]  || { echo "✗ Can't find skills/chat/SKILL.md next to install.sh — run this from a clone of the repo." >&2; exit 1; }
 
 # --- 1. shell function -----------------------------------------------------
 case "${SHELL:-}" in
@@ -66,10 +73,36 @@ fi
 # --- 2. notification helper ------------------------------------------------
 mkdir -p "$CLAUDE_DIR"
 
-# Copy the helper in (overwrite, so re-running picks up improvements).
+# Copy the helpers in (overwrite, so re-running picks up improvements).
 cp "$HELPER_SRC" "$HELPER"
 chmod +x "$HELPER"
 echo "✓ Installed notification helper to $HELPER"
+
+cp "$VOICE_SRC" "$VOICE"
+chmod +x "$VOICE"
+echo "✓ Installed voice-mode toggle to $VOICE"
+
+# Remove the old /chat command + helper from a prior version (now a skill + /voice).
+rm -f "$CLAUDE_DIR/ai-tts-chat.sh" "$CLAUDE_DIR/commands/chat.md"
+
+# /voice slash command: set this session's mode (off | read | chat | status).
+mkdir -p "$CLAUDE_DIR/commands"
+cat > "$VOICE_CMD" <<'EOF'
+---
+description: Set this session's ai-tts voice mode — off | read | chat | status
+---
+Run `bash "$CLAUDE_CONFIG_DIR/ai-tts-voice.sh" $ARGUMENTS` and report the new mode
+in one short line. Modes: off (silent), read (the hook reads the pending question
+aloud), chat (you speak each turn yourself via `say`, one question at a time).
+With no argument it prints the current mode. Affects only this session; voice
+defaults to off when a session starts.
+EOF
+echo "✓ Installed /voice command to $VOICE_CMD"
+
+# /chat conversational skill: turns on chat mode + carries the speak-each-turn behaviour.
+mkdir -p "$(dirname "$SKILL_DST")"
+cp "$SKILL_SRC" "$SKILL_DST"
+echo "✓ Installed /chat skill to $SKILL_DST"
 
 # --- 3. Claude Code notification hook --------------------------------------
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
@@ -102,8 +135,14 @@ Done. Set up:
                  cat file.txt | speak
                  npm run build && speak "build done"
 
-  • Claude Code will speak the pending question + options whenever a session
-    needs you, prefixed with a label. (Takes effect on the next session.)
+  • Voice is OFF by default each session — set a mode per session (Claude can
+    flip it too). Modes:
+        /voice read      # the hook reads the pending question aloud (passive)
+        /voice off       # silent
+        /voice status    # show current mode
+        /chat            # conversational: Claude speaks each turn via \`say\`,
+                         #   one question at a time, and you answer by voice
+    (Slash commands + the skill take effect on the next session in this dir.)
 
 Everything uses the macOS System Voice — no voice flag. To pick the voice
 (including Siri):
